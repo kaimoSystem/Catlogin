@@ -24,6 +24,10 @@ Item {
     // and we don't want to show "Login failed" for that.
     property bool passwordSubmitted: false
 
+    // A password typed while PAM wasn't listening. It is handed over as soon as
+    // PAM asks for it, see onPromptForSecretChanged.
+    property string pendingPassword: ""
+
     // the ids below are visible inside Main.qml and stand in for SDDM's objects
 
     // read-only access to the same theme.conf SDDM uses, so colors and icons stay in one place
@@ -101,7 +105,17 @@ Item {
                 root.unlock()
             else {
                 root.passwordSubmitted = true
-                authenticator.respond(password)
+                // When the screen locks by itself, kscreenlocker ignores every start
+                // during the first seconds (the "grace time") and nobody tries again
+                // later, so after a sleep PAM may never have been started. Then the
+                // password would go nowhere and the button seems dead, so start PAM
+                // now and hand the password over once it asks for it.
+                if (authenticator.state === 1)   // Authenticating
+                    authenticator.respond(password)
+                else {
+                    root.pendingPassword = password
+                    authenticator.startAuthenticating()
+                }
             }
         }
         function suspend() { root.suspendToRam() }
@@ -141,9 +155,17 @@ Item {
                 root.unlockedWithoutPassword = true
         }
 
+        function onPromptForSecretChanged() {
+            if (root.pendingPassword === "")
+                return
+            authenticator.respond(root.pendingPassword)
+            root.pendingPassword = ""
+        }
+
         function onFailed(kind) {
             if (kind !== 0)   // ignore fingerprint/smartcard, only react to the password
                 return
+            root.pendingPassword = ""
             // only complain if the user actually tried a password
             if (root.passwordSubmitted)
                 sddm.loginFailed()
